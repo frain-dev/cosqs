@@ -17,12 +17,20 @@ var (
 	SourceCollection = "sources"
 )
 
+type PubSubType string
+
+const (
+	SQSPubSub    = "sqs"
+	GooglePubSub = "google"
+)
+
 type Source struct {
 	ID              primitive.ObjectID `json:"_" bson:"_id"`
 	UID             string             `json:"uid" bson:"uid"`
 	AccessKeyID     string             `json:"access_key_id" bson:"access_key_id"`
 	SecretAccessKey string             `json:"secret_access_key" bson:"secret_access_key"`
 	DefaultRegion   string             `json:"default_region" bson:"default_region"`
+	Type            PubSubType         `json:"type" bson:"type"`
 	Workers         int                `json:"workers" bson:"workers"`
 	QueueName       string             `json:"queue_name" bson:"queue_name"`
 }

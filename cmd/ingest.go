@@ -3,23 +3,38 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync"
+	"runtime"
 	"time"
 
 	"github.com/frain-dev/cosqs/mongo"
+	"github.com/frain-dev/cosqs/pubsub"
 	"github.com/spf13/cobra"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/sqs"
-	"github.com/dchest/uniuri"
 )
 
 var (
-	sfc          = &SafeCounter{wc: make(map[string]int)}
-	sourceStream = make(map[string]mongo.Source)
+	wp = &WorkerPool{s: make(map[string]*SourceStream)}
 )
+
+type SourceStream struct {
+	source mongo.Source
+	client pubsub.PubSub // the pub sub client
+}
+
+type WorkerPool struct {
+	s map[string]*SourceStream
+}
+
+func (w *WorkerPool) Insert(source mongo.Source, client pubsub.PubSub) {
+	w.s[source.UID] = &SourceStream{source: source, client: client}
+}
+
+func (w *WorkerPool) Stop(sourceId string) {
+	w.s[sourceId].client.Stop()
+}
+
+func (w *WorkerPool) Remove(sourceId string) {
+	delete(w.s, sourceId)
+}
 
 /**
 1. How do we scale the ingesters?
@@ -37,16 +52,20 @@ func addIngesterCommand(a *application) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 
 			ticker := time.NewTicker(1 * time.Minute)
+			rTicker := time.NewTicker(2 * time.Second)
 
-			for range ticker.C {
-				err := discoverSources(a.sourceRepo)
-
-				if err != nil {
-					fmt.Println("error with fetching sources,", err)
+			for {
+				select {
+				case <-ticker.C:
+					err := discoverSources(a.sourceRepo)
+					if err != nil {
+						fmt.Println("error fetching sources", err)
+					}
+				case <-rTicker.C:
+					//prints the number of goroutines running
+					fmt.Println("num of goroutines running:", runtime.NumGoroutine())
 				}
 			}
-
-			return nil
 		},
 	}
 
@@ -55,94 +74,36 @@ func addIngesterCommand(a *application) *cobra.Command {
 
 func discoverSources(sourceRepo mongo.SourceRepository) error {
 	sources, err := sourceRepo.LoadSources(context.Background())
+	fmt.Printf("fetching sources: %+v\n", sources)
 	if err != nil {
 		return err
 	}
 
 	for _, source := range sources {
-		_, exists := sourceStream[source.UID]
+		w, exists := wp.s[source.UID]
 
 		// We've seen this source already
 		if exists {
+			//the number of workers has changed
+			if w.source.Workers != source.Workers {
+				fmt.Println("workers has changed")
+				wp.Stop(source.UID)
+				wp.Remove(source.UID)
+			}
+
 			continue
 		}
 
-		dispatchSource(source)
-		sourceStream[source.UID] = source
+		ps, err := pubsub.NewPubSub(source)
+		if err != nil {
+			fmt.Println("error with pub sub", err)
+			continue
+		}
+
+		wp.Insert(source, ps)
+		ps.Dispatch()
 
 	}
 
 	return nil
-}
-
-func dispatchSource(source mongo.Source) {
-	for i := 1; i <= source.Workers; i++ {
-		go setupQueueListener(source)
-	}
-}
-
-//Sets up a new queue listener
-func setupQueueListener(source mongo.Source) {
-	id := uniuri.NewLen(6)
-	fmt.Printf("Running worker with ID: %s\n", id)
-	sess, err := session.NewSession(&aws.Config{
-		Region:      aws.String(source.DefaultRegion),
-		Credentials: credentials.NewStaticCredentials(source.AccessKeyID, source.SecretAccessKey, ""),
-	})
-
-	if err != nil {
-		fmt.Println("error with initializing session", err)
-	}
-
-	//create a service client
-	svc := sqs.New(sess)
-	url, err := svc.GetQueueUrl(&sqs.GetQueueUrlInput{
-		QueueName: &source.QueueName,
-	})
-
-	if err != nil {
-		fmt.Println("error with getting queue url,", err)
-	}
-
-	//get the queue url
-	queueURL := url.QueueUrl
-	fmt.Println("queue url is", *queueURL)
-
-	if err != nil {
-		fmt.Printf("failed to fetch sqs message %v", err)
-	}
-
-	//infinite loop to poll messages from the queue
-	for {
-		output, err := svc.ReceiveMessage(&sqs.ReceiveMessageInput{
-			QueueUrl:            queueURL,
-			MaxNumberOfMessages: aws.Int64(10),
-			WaitTimeSeconds:     aws.Int64(1),
-		})
-
-		if err != nil {
-			fmt.Printf("failed to fetch sqs message %v", err)
-		}
-
-		var wg sync.WaitGroup
-		for _, message := range output.Messages {
-			wg.Add(1)
-			go func(m *sqs.Message) {
-				defer wg.Done()
-				fmt.Println("RECEIVING MESSAGE >>>")
-				fmt.Println(*m.Body)
-				sfc.mu.Lock()
-				sfc.count++
-				fmt.Println("total number of messages received\n", sfc.count)
-				sfc.mu.Unlock()
-				fmt.Printf("time :%v", time.Now().Format("Jan _2 15:04:05.000000"))
-				svc.DeleteMessage(&sqs.DeleteMessageInput{
-					QueueUrl:      queueURL,
-					ReceiptHandle: m.ReceiptHandle,
-				})
-			}(message)
-
-			wg.Wait()
-		}
-	}
 }

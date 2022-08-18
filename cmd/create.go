@@ -10,7 +10,7 @@ import (
 )
 
 func addCreateCommand(a *application) *cobra.Command {
-	var accessKeyID, secretAccessKey, defaultRegion, queueName string
+	var accessKeyID, secretAccessKey, defaultRegion, queueName, pubSubType string
 	var workers int
 
 	cmd := &cobra.Command{
@@ -23,6 +23,7 @@ func addCreateCommand(a *application) *cobra.Command {
 				SecretAccessKey: secretAccessKey,
 				DefaultRegion:   defaultRegion,
 				QueueName:       queueName,
+				Type:            mongo.PubSubType(pubSubType),
 				Workers:         workers,
 			}
 
@@ -40,6 +41,7 @@ func addCreateCommand(a *application) *cobra.Command {
 	cmd.Flags().StringVar(&secretAccessKey, "secret-access-key", "", "Secret Access Key")
 	cmd.Flags().StringVar(&defaultRegion, "default-region", "", "Default Region")
 	cmd.Flags().StringVar(&queueName, "queue-name", "", "Queue Name")
+	cmd.Flags().StringVar(&pubSubType, "type", "sqs", "Pub Sub Type")
 	cmd.Flags().IntVar(&workers, "workers", 1, "Workers per source")
 
 	// mark flags as required
