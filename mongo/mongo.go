@@ -30,6 +30,9 @@ type Source struct {
 	AccessKeyID     string             `json:"access_key_id" bson:"access_key_id"`
 	SecretAccessKey string             `json:"secret_access_key" bson:"secret_access_key"`
 	DefaultRegion   string             `json:"default_region" bson:"default_region"`
+	APIKey          string             `json:"api_key" bson:"api_key"`
+	ProjectID       string             `json:"project_id" bson:"project_id"`
+	SubscriptionID  string             `json:"subscription_id" bson:"subscription_id"`
 	Type            PubSubType         `json:"type" bson:"type"`
 	Workers         int                `json:"workers" bson:"workers"`
 	QueueName       string             `json:"queue_name" bson:"queue_name"`

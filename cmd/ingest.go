@@ -74,7 +74,6 @@ func addIngesterCommand(a *application) *cobra.Command {
 
 func discoverSources(sourceRepo mongo.SourceRepository) error {
 	sources, err := sourceRepo.LoadSources(context.Background())
-	fmt.Printf("fetching sources: %+v\n", sources)
 	if err != nil {
 		return err
 	}

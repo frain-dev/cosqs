@@ -1,6 +1,7 @@
 package pubsub
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"github.com/dchest/uniuri"
 	"github.com/frain-dev/cosqs/mongo"
+
+	"cloud.google.com/go/pubsub"
 )
 
 type PubSub interface {
@@ -90,9 +93,6 @@ func (s *SQSPubSub) Listen() {
 
 	//infinite loop to poll messages from the queue
 	for {
-		canceled := s.cancelled()
-		fmt.Println("canceled is:", canceled)
-
 		if s.cancelled() {
 			return
 		}
@@ -112,13 +112,13 @@ func (s *SQSPubSub) Listen() {
 			wg.Add(1)
 			go func(m *sqs.Message) {
 				defer wg.Done()
-				fmt.Println("RECEIVING MESSAGE >>>")
-				fmt.Println(*m.Body)
+				fmt.Println("RECEIVING MESSAGE FROM SQS")
+				fmt.Printf("message received: %s\n", *m.Body)
 				s.sfc.mu.Lock()
 				s.sfc.count++
-				fmt.Println("total number of messages received\n", s.sfc.count)
+				fmt.Printf("total number of messages received: %v\n", s.sfc.count)
 				s.sfc.mu.Unlock()
-				fmt.Printf("time :%v", time.Now().Format("Jan _2 15:04:05.000000"))
+				fmt.Printf("time\n :%v", time.Now().Format("15:04:05\n"))
 				svc.DeleteMessage(&sqs.DeleteMessageInput{
 					QueueUrl:      queueURL,
 					ReceiptHandle: m.ReceiptHandle,
@@ -132,17 +132,74 @@ func (s *SQSPubSub) Listen() {
 
 type GooglePubSub struct {
 	source mongo.Source
+	cancel context.CancelFunc
+	sfc    *SafeCounter
+	ctx    context.Context
 }
 
 func newGooglePubSub(source mongo.Source) PubSub {
-	return &GooglePubSub{source: source}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &GooglePubSub{
+		source: source,
+		ctx:    ctx,
+		sfc:    &SafeCounter{wc: make(map[string]int)},
+		cancel: cancel,
+	}
 }
 
-func (g *GooglePubSub) Dispatch() {}
+func (g *GooglePubSub) Dispatch() {
+	go g.Listen()
+}
 
-func (g *GooglePubSub) Listen() {}
+func (g *GooglePubSub) Stop() {
+	g.cancel()
+}
 
-func (g *GooglePubSub) Stop() {}
+func (g *GooglePubSub) Listen() {
+	client, err := pubsub.NewClient(context.Background(), g.source.ProjectID)
+
+	if err != nil {
+		fmt.Println("error with setting up client", err)
+	}
+
+	defer client.Close()
+
+	sub := client.Subscription("convoy-pub-sub-sub")
+	// We might need to save the sub.ID here within the source collection
+
+	if err != nil {
+		fmt.Println("error creating subscription", err)
+	}
+
+	fmt.Println("sub ID is", sub.ID())
+
+	//To enable concurrency settings
+	sub.ReceiveSettings.Synchronous = false
+	// NumGoroutines determines the number of goroutines sub.Receive will spawn to pull messages
+	sub.ReceiveSettings.NumGoroutines = g.source.Workers
+	// MaxOutstandingMessages limits the number of concurrent handlers of messages.
+	// In this case, up to 8 unacked messages can be handled concurrently.
+	sub.ReceiveSettings.MaxOutstandingMessages = 8
+
+	err = sub.Receive(g.ctx, func(_ context.Context, m *pubsub.Message) {
+		fmt.Println("RECEIVING MESSAGE FROM GOOGLE PUB SUB >>>")
+		fmt.Println(string(m.Data))
+		g.sfc.mu.Lock()
+		g.sfc.count++
+		fmt.Println("total number of messages received\n", g.sfc.count)
+		g.sfc.mu.Unlock()
+		fmt.Printf("time :%v", time.Now().Format("Jan _2 15:04:05.000000"))
+		m.Ack()
+	})
+
+	if err != nil {
+		fmt.Println("sub.Receive returned error", err)
+		return
+	}
+
+	return
+}
 
 func NewPubSub(source mongo.Source) (PubSub, error) {
 	if source.Type == mongo.SQSPubSub {

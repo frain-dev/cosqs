@@ -11,6 +11,7 @@ import (
 
 func addCreateCommand(a *application) *cobra.Command {
 	var accessKeyID, secretAccessKey, defaultRegion, queueName, pubSubType string
+	var projectID, subscriptionID string
 	var workers int
 
 	cmd := &cobra.Command{
@@ -23,6 +24,8 @@ func addCreateCommand(a *application) *cobra.Command {
 				SecretAccessKey: secretAccessKey,
 				DefaultRegion:   defaultRegion,
 				QueueName:       queueName,
+				SubscriptionID:  subscriptionID,
+				ProjectID:       projectID,
 				Type:            mongo.PubSubType(pubSubType),
 				Workers:         workers,
 			}
@@ -43,12 +46,14 @@ func addCreateCommand(a *application) *cobra.Command {
 	cmd.Flags().StringVar(&queueName, "queue-name", "", "Queue Name")
 	cmd.Flags().StringVar(&pubSubType, "type", "sqs", "Pub Sub Type")
 	cmd.Flags().IntVar(&workers, "workers", 1, "Workers per source")
+	cmd.Flags().StringVar(&projectID, "project-id", "", "Google Project ID")
+	cmd.Flags().StringVar(&subscriptionID, "subscription-id", "", "Pub Sub Subscription ID")
 
 	// mark flags as required
-	cmd.MarkFlagRequired("access-key-id")
-	cmd.MarkFlagRequired("secret-access-key")
-	cmd.MarkFlagRequired("default-region")
-	cmd.MarkFlagRequired("queue-name")
+	// cmd.MarkFlagRequired("access-key-id")
+	// cmd.MarkFlagRequired("secret-access-key")
+	// cmd.MarkFlagRequired("default-region")
+	// cmd.MarkFlagRequired("queue-name")
 
 	return cmd
 }
