@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,14 @@ type SafeCounter struct {
 	mu    sync.Mutex
 	wc    map[string]int
 	count int
+}
+
+type Event struct {
+	OwnerID       string            `json:"owner_id"`
+	EndpointID    string            `json:"endpoint_id"`
+	EventType     string            `json:"event_type"`
+	Data          json.RawMessage   `json:"data"`
+	CustomHeaders map[string]string `json:"custom_headers"`
 }
 
 type Producer interface {
@@ -82,14 +91,49 @@ func (s *SQSProducer) BroadCast() error {
 func (s *SQSProducer) dispatch() error {
 	messageId := uuid.NewString()
 
-	fmt.Println("message Id is", messageId)
-
 	defer s.wg.Done()
 
-	_, err := s.svc.SendMessage(&sqs.SendMessageInput{
-		MessageGroupId: aws.String(uuid.NewString()),
-		QueueUrl:       s.queueURL,
-		MessageBody:    aws.String(messageId),
+	me := fmt.Sprintf(`{
+		"event": "payment.success",
+		"data": {
+			"status": "Completed",
+			"description": "Transaction successful",
+			"userID": "%s",
+			"paymentReference": "test_ref_85149",
+			"amount": 200,
+			"senderAccountName": "Alan Christian Segun",
+			"sourceAccountNumber": "299999993564",
+			"sourceAccountType": "personal",
+			"sourceBankCode": "50211",
+			"destinationAccountNumber": "00855584818",
+			"destinationBankCode": "063"
+		}
+	}`, messageId)
+
+	da := json.RawMessage(me)
+	endpointID := "f2bee96e-a144-4328-b221-5ba9ac6c61e6"
+
+
+	event := &Event{
+		EndpointID: endpointID,
+		EventType:  "payment.success",
+		Data:       da,
+		CustomHeaders: map[string]string{
+			"X-Api-Key": "Test",
+		},
+	}
+
+	by, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("message is", string(by))
+
+	_, err = s.svc.SendMessage(&sqs.SendMessageInput{
+		// MessageGroupId: aws.String(uuid.NewString()),
+		QueueUrl:    s.queueURL,
+		MessageBody: aws.String(string(by)),
 	})
 
 	if err != nil {
@@ -142,8 +186,44 @@ func (g *GoogleProducer) BroadCast() error {
 	for i := 1; i <= g.rate; i++ {
 		messageId := uuid.NewString()
 
+		me := fmt.Sprintf(`{
+			"event": "payment.success",
+			"data": {
+				"status": "Completed",
+				"description": "Transaction successful",
+				"userID": "%s",
+				"paymentReference": "test_ref_85149",
+				"amount": 200,
+				"senderAccountName": "Alan Christian Segun",
+				"sourceAccountNumber": "299999993564",
+				"sourceAccountType": "personal",
+				"sourceBankCode": "50211",
+				"destinationAccountNumber": "00855584818",
+				"destinationBankCode": "063"
+			}
+		}`, messageId)
+
+		da := json.RawMessage(me)
+		endpointID := "f2bee96e-a144-4328-b221-5ba9ac6c61e6"
+
+		event := &Event{
+			EndpointID: endpointID,
+			EventType:  "payment.success",
+			Data:       da,
+			CustomHeaders: map[string]string{
+				"X-Api-Key": "Test",
+			},
+		}
+
+		by, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+
+		fmt.Println("message is", string(by))
+
 		result := g.topic.Publish(ctx, &pubsub.Message{
-			Data: []byte(messageId),
+			Data: by,
 		})
 
 		g.wg.Add(1)
@@ -177,6 +257,9 @@ func addProducerCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "produce",
 		Short: "send events",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var p Producer
 			var err error
